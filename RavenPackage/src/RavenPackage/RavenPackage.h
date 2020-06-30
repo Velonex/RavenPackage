@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <iostream>
 #include <string>
+#include <filesystem>
 
 // Logging defines for possibility of custom logging
 #ifndef RPK_NO_LOG
