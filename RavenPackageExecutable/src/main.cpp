@@ -32,7 +32,7 @@ int main(int argc, char** argv) {
 		std::cout << "Type ?exit to exit." << std::endl;
 		while (true) {
 			std::string choice;
-			std::cout << "Archive (archive/extract/extractto) > ";
+			std::cout << "Archive (archive/extract/extractto/browse) > ";
 			std::getline(std::cin, choice);
 			if (choice == "extract") {
 				std::cout << "Enter input path > ";
@@ -55,7 +55,7 @@ int main(int argc, char** argv) {
 				if (path2 == "?exit") exit(0);
 				rvn::package::extractFile(path1, path2, path3);
 			}
-			else  if (choice == "archive") {
+			else if (choice == "archive") {
 				std::cout << "Enter directory path > ";
 				std::getline(std::cin, path1);
 				if (path1 == "?exit") exit(0);
@@ -63,6 +63,67 @@ int main(int argc, char** argv) {
 				std::getline(std::cin, path2);
 				if (path2 == "?exit") exit(0);
 				rvn::package::createArchiveFromDir(path1, path2, true);
+			}
+			else if (choice == "browse") {
+				std::cout << "Enter archive path > ";
+				std::string archivePath;
+				std::getline(std::cin, archivePath);
+				std::string path = "";
+				for (;;) {
+					auto entries = rvn::package::getEntriesAt(archivePath, path);
+					//auto entries = rvn::package::getEntriesAt("lib.rpk", "/pics");
+					if (entries.status != RPK_OK) {
+						std::cout << "Error code: " << entries.status << std::endl;
+						break;
+					}
+					std::cout << std::endl << "Files in archive " << archivePath << path << std::endl;
+					for (auto entry : entries.entries) {
+						if (entry.isFile) {
+							std::cout << "FILE";
+							std::cout << "\t" << entry.formattedLength << "\t";
+							std::cout << entry.name << std::endl;
+						}
+						else {
+							std::cout << "DIR ";
+							std::cout << "\t" << entry.name << std::endl;
+							if (entry.hasSubFiles) {
+								std::cout << "    \t" << (char)192 << "..." << std::endl;
+							}
+						}
+					}
+					bool exit = false;
+					for (;;) {
+						std::cout << std::endl << "Change to dir (?exit to exit)> ";
+						std::string in;
+						std::getline(std::cin, in);
+						bool exists = false;
+						for (auto entry : entries.entries) {
+							if (!entry.isFile) {
+								if (entry.name == in) exists = true;
+							}
+						}
+						if (exists) {
+							path = path + "/" + in;
+							exists = true;
+						}
+						else if (in == "..") {
+							if (path.find('/') != path.npos) {
+								path = path.substr(path.find_last_of('/'), 0);
+								exists = true;
+							}
+						}
+						else if (in == "?exit") {
+							exit = true;
+							break;
+						}
+						else {
+							std::cout << "Invalid dir" << std::endl;
+						}
+						std::cout << std::endl;
+						if (exists) break;
+					}
+					if (exit) break;
+				}
 			}
 			else if (choice == "?exit") exit(0);
 			else std::cout << "Invalid choice" << std::endl;

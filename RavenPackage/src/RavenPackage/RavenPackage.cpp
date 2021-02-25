@@ -2,8 +2,144 @@
 
 #include <filesystem>
 #include <fstream>
+#include <sstream>
 
 namespace rvn {
+	/* Structure definition */
+	using fpath = std::filesystem::path;
+	struct package::Structure {
+		struct File {
+			File(const std::string& name, const fpath& path) {
+				this->name = name;
+				this->path = path;
+				length = std::filesystem::file_size(path);
+			}
+			const std::string& getName() const { return name; }
+			uint64_t getLength() const { return length; }
+			const fpath& getPath() const { return path; }
+			int writeToOutput(std::ofstream& out) {
+				std::ifstream in(path, std::ios::binary);
+				if (in.is_open()) {
+					std::string buf(BUF_SIZE, 0x00);
+					for (std::uint64_t i = 0; i < (length / BUF_SIZE) + 1; i++) {
+						buf = std::string(length - in.tellg() > BUF_SIZE ? BUF_SIZE : length - in.tellg(), 0x00);
+						in.read(&buf[0], buf.length());
+						out << buf;
+					}
+				}
+				else {
+					RPK_ERROR("Couldn't open file '" + name + "'");
+					return RPK_COULDNT_OPEN_FILE;
+				}
+				return RPK_OK;
+			}
+			std::uint64_t length;
+			std::string name;
+			fpath path;
+		};
+		struct Directory {
+			Directory(const std::string& name, const fpath& path) {
+				this->name = name;
+				this->path = path;
+				headerlength = 0;
+				length = 0;
+			}
+			void readFiles() {
+				for (auto p : std::filesystem::directory_iterator(path)) {
+					if (p.is_directory()) {
+						Directory dir(p.path().filename().string(), p.path());
+						dir.readFiles();
+						directories.push_back(dir);
+					}
+					else if (p.is_regular_file()) {
+						File file(p.path().filename().string(), p.path());
+						files.push_back(file);
+					}
+					else {
+						RPK_TRACE("Unknown/unsupported file type. Skipping...");
+					}
+				}
+				headerlength = RPK_V1_FILE_COUNT_LENGTH;
+				length = 0;
+				for (auto file : files) {
+					length += file.getLength();
+					headerlength += RPK_V1_FILE_HEADER_LENGTH;
+					headerlength += file.getName().length();
+				}
+				for (auto dir : directories) {
+					length += dir.getLength() + dir.getHeaderLength();
+					headerlength += RPK_V1_DIR_HEADER_LENGTH;
+					headerlength += dir.getName().length();
+				}
+			}
+			const std::vector<Directory>& getDirectories() const { return directories; }
+			const std::vector<File>& getFiles() const { return files; }
+			const std::string& getName() const { return name; }
+			const fpath& getPath() const { return path; }
+			std::uint64_t getLength() const { return length; }
+			std::uint64_t getHeaderLength() const { return headerlength; }
+			int writeToOutput(std::ofstream& out) {
+				if ((directories.size() + files.size()) > UINT16_MAX) return RPK_TOO_MANY_FILES;
+				else {
+					std::uint64_t dirStart = out.tellp();
+					std::uint64_t currentBegin = dirStart + headerlength;
+					out.write(util::convertUint16ToChars((std::uint16_t)files.size() + (std::uint16_t)directories.size()).chars, 2);
+					for (auto file : files) {
+						out << (char)RPK_TRAIT_IS_FILE;
+						out << (std::uint8_t)file.getName().length();
+						out << file.getName().substr(0, 255);
+						out.write(util::convertUint64ToChars(currentBegin).chars, 8);
+						currentBegin += file.getLength();
+						out.write(util::convertUint64ToChars(currentBegin).chars, 8);
+					}
+					for (auto dir : directories) {
+						out << (char)0;
+						out << (uint8_t)dir.getName().length();
+						out << dir.getName().substr(0, 255);
+						out.write(util::convertUint64ToChars(currentBegin).chars, 8);
+						currentBegin += dir.getLength() + dir.getHeaderLength();
+					}
+					for (auto file : files) {
+						file.writeToOutput(out);
+					}
+					for (auto dir : directories) {
+						dir.writeToOutput(out);
+					}
+				}
+				return RPK_OK;
+			}
+			std::vector<Directory> directories;
+			std::vector<File> files;
+			std::uint64_t length, headerlength;
+			std::string name;
+			fpath path;
+		};
+		Structure() {}
+		void readStructure(const std::string& dirPath) {
+			this->dirPath = dirPath;
+			for (auto p : std::filesystem::directory_iterator(dirPath)) {
+				if (p.is_directory()) {
+					Directory dir(p.path().filename().string(), p.path());
+					dir.readFiles();
+					directories.push_back(dir);
+				}
+				else if (p.is_regular_file()) {
+					File file(p.path().filename().string(), p.path());
+					files.push_back(file);
+				}
+				else {
+					RPK_TRACE("Unknown/unsupported file type. Skipping...");
+				}
+			}
+		}
+		const std::string& getPath() const { return dirPath; }
+		const std::vector<Directory>& getDirectories() const { return directories; }
+		const std::vector<File>& getFiles() const { return files; }
+		std::string dirPath;
+		std::vector<Directory> directories;
+		std::vector<File> files;
+	};
+	/* Structure definition end */
 	int package::createArchiveFromDir(const std::string& dirPath, const std::string& archivePath, bool overrideOldTarget)
 	{
 		if (!std::filesystem::exists(dirPath)) {
@@ -22,141 +158,6 @@ namespace rvn {
 				RPK_ERROR("Output target already exists. This error can be disabled by setting overrideOldTarget to true");
 				return RPK_OUTPUT_EXISTS;
 			}
-			/* Structure definition */
-			using fpath = std::filesystem::path;
-			struct Structure {
-				struct File {
-					File(const std::string& name, const fpath& path) {
-						this->name = name;
-						this->path = path;
-						length = std::filesystem::file_size(path);
-					}
-					const std::string& getName() const { return name; }
-					uint64_t getLength() const { return length; }
-					const fpath& getPath() const { return path; }
-					int writeToOutput(std::ofstream& out) {
-						std::ifstream in(path, std::ios::binary);
-						if (in.is_open()) {
-							std::string buf(BUF_SIZE, 0x00);
-							for (std::uint64_t i = 0; i < (length / BUF_SIZE) + 1; i++) {
-								buf = std::string(length - in.tellg() > BUF_SIZE ? BUF_SIZE : length - in.tellg(), 0x00);
-								in.read(&buf[0], buf.length());
-								out << buf;
-							}
-						}
-						else {
-							RPK_ERROR("Couldn't open file '" + name + "'");
-							return RPK_COULDNT_OPEN_FILE;
-						}
-						return RPK_OK;
-					}
-					std::uint64_t length;
-					std::string name;
-					fpath path;
-				};
-				struct Directory {
-					Directory(const std::string& name, const fpath& path) {
-						this->name = name;
-						this->path = path;
-						headerlength = 0;
-						length = 0;
-					}
-					void readFiles() {
-						for (auto p : std::filesystem::directory_iterator(path)) {
-							if (p.is_directory()) {
-								Directory dir(p.path().filename().string(), p.path());
-								dir.readFiles();
-								directories.push_back(dir);
-							}
-							else if (p.is_regular_file()) {
-								File file(p.path().filename().string(), p.path());
-								files.push_back(file);
-							}
-							else {
-								RPK_TRACE("Unknown/unsupported file type. Skipping...");
-							}
-						}
-						headerlength = RPK_V1_FILE_COUNT_LENGTH;
-						length = 0;
-						for (auto file : files) {
-							length += file.getLength();
-							headerlength += RPK_V1_FILE_HEADER_LENGTH;
-							headerlength += file.getName().length();
-						}
-						for (auto dir : directories) {
-							length += dir.getLength() + dir.getHeaderLength();
-							headerlength += RPK_V1_DIR_HEADER_LENGTH;
-							headerlength += dir.getName().length();
-						}
-					}
-					const std::vector<Directory>& getDirectories() const { return directories; }
-					const std::vector<File>& getFiles() const { return files; }
-					const std::string& getName() const { return name; }
-					const fpath& getPath() const { return path; }
-					std::uint64_t getLength() const { return length; }
-					std::uint64_t getHeaderLength() const { return headerlength; }
-					int writeToOutput(std::ofstream& out) {
-						if ((directories.size() + files.size()) > UINT16_MAX) return RPK_TOO_MANY_FILES;
-						else {
-							std::uint64_t dirStart = out.tellp();
-							std::uint64_t currentBegin = dirStart + headerlength;
-							out.write(util::convertUint16ToChars((std::uint16_t)files.size() + (std::uint16_t)directories.size()).chars, 2);
-							for (auto file : files) {
-								out << (char)RPK_TRAIT_IS_FILE;
-								out << (std::uint8_t)file.getName().length();
-								out << file.getName().substr(0, 255);
-								out.write(util::convertUint64ToChars(currentBegin).chars, 8);
-								currentBegin += file.getLength();
-								out.write(util::convertUint64ToChars(currentBegin).chars, 8);
-							}
-							for (auto dir : directories) {
-								out << (char)0;
-								out << (uint8_t)dir.getName().length();
-								out << dir.getName().substr(0, 255);
-								out.write(util::convertUint64ToChars(currentBegin).chars, 8);
-								currentBegin += dir.getLength() + dir.getHeaderLength();
-							}
-							for (auto file : files) {
-								file.writeToOutput(out);
-							}
-							for (auto dir : directories) {
-								dir.writeToOutput(out);
-							}
-						}
-						return RPK_OK;
-					}
-					std::vector<Directory> directories;
-					std::vector<File> files;
-					std::uint64_t length, headerlength;
-					std::string name;
-					fpath path;
-				};
-				Structure() {}
-				void readStructure(const std::string& dirPath) {
-					this->dirPath = dirPath;
-					for (auto p : std::filesystem::directory_iterator(dirPath)) {
-						if (p.is_directory()) {
-							Directory dir(p.path().filename().string(), p.path());
-							dir.readFiles();
-							directories.push_back(dir);
-						}
-						else if(p.is_regular_file()) {
-							File file(p.path().filename().string(), p.path());
-							files.push_back(file);
-						}
-						else {
-							RPK_TRACE("Unknown/unsupported file type. Skipping...");
-						}
-					}
-				}
-				const std::string& getPath() const { return dirPath; }
-				const std::vector<Directory>& getDirectories() const { return directories; }
-				const std::vector<File>& getFiles() const { return files; }
-				std::string dirPath;
-				std::vector<Directory> directories;
-				std::vector<File> files;
-			};
-			/* Structure definition end */
 			Structure structure;
 			structure.readStructure(dirPath);
 
@@ -327,6 +328,118 @@ namespace rvn {
 	{
 		return extractFile(archPath, filePath, std::filesystem::path(filePath).filename().string());
 	}
+	Entries package::getEntriesAt(const std::string& archPath, const std::string& filePath)
+	{
+		Entries ret;
+		std::vector<Entry>& entries = ret.entries;
+		int& status = ret.status;
+		if (!std::filesystem::exists(archPath)) {
+			RPK_ERROR("Input doesnt exist");
+			status = RPK_ARCHIVE_DOESNT_EXIST;
+		}
+		else if (std::filesystem::is_directory(archPath)) {
+			RPK_ERROR("Input cant be a directory");
+			status = RPK_INPUT_IS_DIRECTORY;
+		}
+		else {
+			std::ifstream in(archPath, std::ios::binary);
+			if (in) {
+				std::string buffer(RPK_MAGIC_NUMBER_LENGTH, 0x00);
+				in.read(&buffer[0], buffer.length());
+				char cbuffer;
+				if (buffer != RPK_MAGIC_NUMBER) {
+					RPK_ERROR("Input is no Raven Package");
+					status = RPK_INPUT_ISNT_RAVEN_PACKAGE; return ret;
+				}
+				in.get(cbuffer);
+				if (std::find(supportedExtractVersions.begin(), supportedExtractVersions.end(), (std::uint8_t)cbuffer)
+					== supportedExtractVersions.end()) {
+					RPK_ERROR("Unsupported file version");
+					status = RPK_UNSUPPORTED_VERSION; return ret;
+				}
+				switch ((std::uint8_t)cbuffer) {
+				case RPK_VERSION_1: {
+					std::string filePathCopy = filePath;
+					std::size_t position = 0;
+					//bool exists = false;
+					while (filePathCopy.find('\\') != filePathCopy.npos) {
+						position = filePathCopy.find('\\');
+						filePathCopy = filePathCopy.replace(position, 1, "/");
+					}
+					std::vector<std::string> fileNames = util::split(filePathCopy, "/");
+					for (auto file : fileNames) {
+						if (file.empty()) { RPK_ERROR("Invalid path"); status = RPK_INVALID_PATH; return ret; }
+					}
+					std::uint64_t begin = in.tellg();
+					for (auto file : fileNames) {
+						//exists = false;
+						buffer.resize(2, 0);
+						in.read(&buffer[0], 2);
+						std::uint16_t fileCount = util::convertCharsToUint16(buffer.c_str());
+						for (std::uint16_t i = 0; i < fileCount; i++) {
+							in.get(cbuffer);
+							bool isFile = cbuffer & RPK_TRAIT_IS_FILE;
+							// name length
+							in.get(cbuffer);
+							buffer.resize((std::size_t)(std::uint8_t)cbuffer);
+							in.read(&buffer[0], buffer.length());
+							std::string name = buffer;
+							if (name == file && !isFile) {
+								//exists = true;
+								buffer.resize(8);
+								in.read(&buffer[0], 8);
+								begin = util::convertCharsToUint64(buffer.c_str());
+							}
+							else {
+								if (isFile) {
+									in.seekg(in.tellg() + (std::streampos)16);
+								}
+								else {
+									in.seekg(in.tellg() + (std::streampos)8);
+								}
+							}
+						}
+					}
+					// analyze the directory
+					in.seekg(begin);
+					buffer.resize(2, 0);
+					in.read(&buffer[0], 2);
+					std::uint16_t fileCount = util::convertCharsToUint16(buffer.c_str());
+					for (std::uint16_t i = 0; i < fileCount; i++) {
+						Entry entry;
+						in.get(cbuffer);
+						bool isFile = cbuffer & RPK_TRAIT_IS_FILE;
+						entry.isFile = isFile;
+						// name length
+						in.get(cbuffer);
+						buffer.resize((std::size_t)(std::uint8_t)cbuffer);
+						in.read(&buffer[0], buffer.length());
+						std::string name = buffer;
+						entry.name = name;
+						if (isFile) {
+							// size
+							buffer.resize(8);
+							in.read(&buffer[0], 8);
+							std::uint64_t begin = util::convertCharsToUint64(buffer.c_str());
+							in.read(&buffer[0], 8);
+							entry.length = util::convertCharsToUint64(buffer.c_str()) - begin;
+							entry.formattedLength = util::formatBytes(entry.length);
+						}
+						else {
+							in.seekg(in.tellg() + (std::streampos)8);
+						}
+						ret.entries.push_back(entry);
+					}
+				}
+				}
+			}
+			else {
+				RPK_ERROR("Couln't open input");
+				status = RPK_COULDNT_OPEN_FILE;
+			}
+		}
+		return ret;
+	}
 	package::bytes<2> package::util::convertUint16ToChars(std::uint16_t uint16)
 	{
 		package::bytes<2> bytes;
@@ -375,5 +488,30 @@ namespace rvn {
 			out.push_back(str.substr(start, end - start));
 		}
 		return out;
+	}
+	std::string package::util::formatBytes(std::uint64_t bytes)
+	{
+		std::string pre = "";
+		std::uint64_t dividend = 1;
+		if (bytes > 1099511627776) {
+			pre = 'T';
+			dividend = 1099511627776;
+		}
+		else if (bytes > 1073741824) {
+			pre = 'G';
+			dividend = 1073741824;
+		}
+		else if (bytes > 1048576) {
+			pre = 'M';
+			dividend = 1048576;
+		}
+		else if (bytes > 1024) {
+			pre = 'k';
+			dividend = 1024;
+		}
+		std::stringstream ret;
+		ret << std::setprecision(5) << (static_cast<double>(static_cast<std::uint64_t>((double)bytes / (double)dividend) * 10.) / 10.);
+		ret << pre << "B";
+		return ret.str();
 	}
 }

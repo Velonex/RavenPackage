@@ -61,24 +61,38 @@ const std::vector<std::uint8_t> supportedExtractVersions = { RPK_VERSION_1 };
 #endif
 
 namespace rvn {
+	// An entry in a dir
+	struct Entry {
+		std::string name = "";
+		bool isFile = true;
+		std::size_t length = 0;
+		std::string formattedLength = "";
+		bool hasSubFiles = false;
+	};
+	struct Entries {
+		std::vector<Entry> entries;
+		int status = RPK_OK;
+	};
 	struct package { 
 		static int createArchiveFromDir(const std::string& dirPath, const std::string& archivePath, bool overrideOldTarget = false);
 		static int extractFile(const std::string& archPath, const std::string& filePath, const std::string& targetPath);
 		static int extractFile(const std::string& archPath, const std::string& filePath);
+		static Entries getEntriesAt(const std::string& archPath, const std::string& filePath);
 	private:
+		struct Structure;
 		template<std::uint8_t size>
 		struct bytes {
 			bytes() = default;
 			bytes(const char* str) { for (std::uint8_t i = 0; i < size; i++) { chars[i] = str[i]; } }
 			char chars[size];
 		};
-		
 		struct util {
 			static bytes<2> convertUint16ToChars(std::uint16_t uint16);
 			static bytes<8> convertUint64ToChars(std::uint64_t uint64);
 			static std::uint16_t convertCharsToUint16(bytes<2> bytes);
 			static std::uint64_t convertCharsToUint64(bytes<8> bytes);
 			static std::vector<std::string> split(const std::string& str, const std::string& delim);
+			static std::string formatBytes(std::uint64_t bytes);
 		};
 	};
 }
