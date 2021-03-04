@@ -71,13 +71,12 @@ int main(int argc, char** argv) {
 				std::string path = "";
 				for (;;) {
 					auto entries = rvn::package::getEntriesAt(archivePath, path);
-					//auto entries = rvn::package::getEntriesAt("lib.rpk", "/pics");
 					if (entries.status != RPK_OK) {
 						std::cout << "Error code: " << entries.status << std::endl;
 						break;
 					}
 					std::cout << std::endl << "Files in archive " << archivePath << path << std::endl;
-					for (auto entry : entries.entries) {
+					for (auto& entry : entries.entries) {
 						if (entry.isFile) {
 							std::cout << "FILE";
 							std::cout << "\t" << entry.formattedLength << "\t";
@@ -97,7 +96,7 @@ int main(int argc, char** argv) {
 						std::string in;
 						std::getline(std::cin, in);
 						bool exists = false;
-						for (auto entry : entries.entries) {
+						for (auto& entry : entries.entries) {
 							if (!entry.isFile) {
 								if (entry.name == in) exists = true;
 							}

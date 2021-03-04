@@ -4,6 +4,10 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <optional>
+#include <sstream>
+#include <fstream>
+#include <filesystem>
 
 // Logging defines for possibility of custom logging
 #ifndef RPK_NO_LOG
@@ -61,7 +65,7 @@ const std::vector<std::uint8_t> supportedExtractVersions = { RPK_VERSION_1 };
 #endif
 
 namespace rvn {
-	// An entry in a dir
+	// An entry in a directory
 	struct Entry {
 		std::string name = "";
 		bool isFile = true;
@@ -73,13 +77,83 @@ namespace rvn {
 		std::vector<Entry> entries;
 		int status = RPK_OK;
 	};
-	struct package { 
+	struct package {
+		struct PackageCreator;
+	public:
+		// Creates a Raven Package from a directory on the harddrive
 		static int createArchiveFromDir(const std::string& dirPath, const std::string& archivePath, bool overrideOldTarget = false);
+		// Creates a Raven Package from a PackageCreator struct, so it can be used to create a package from memory
+		static int createArchive(const PackageCreator& package, const std::string& archivePath, bool overrideOldTarget = false);
+		// Extracts a file from an archive to a certain location
 		static int extractFile(const std::string& archPath, const std::string& filePath, const std::string& targetPath);
+		// Extract a file from an archive and gives the file the name it had in the archive
 		static int extractFile(const std::string& archPath, const std::string& filePath);
+		// Extracts all directories and files in an directory in an archive (whether a directory has sub files doesn't work yet)
 		static Entries getEntriesAt(const std::string& archPath, const std::string& filePath);
 	private:
+		struct File {
+			File(const std::string& name, const std::string& path) {
+				_name = name;
+				_path = path;
+			}
+			File(const std::string& name, const std::shared_ptr<std::string>& source) {
+				_name = name;
+				_source = source;
+			}
+			void open() {
+				if (_path.has_value()) {
+					_istream.reset(new std::ifstream(_path.value()));
+				}
+				else {
+					_istream.reset(new std::istringstream(*_source.value().get()));
+				}
+			}
+			const std::shared_ptr<std::istream>& getIStream() const { return _istream; }
+			std::uint64_t getLength() const {
+				if (_path.has_value()) {
+					return std::filesystem::file_size(_path.value());
+				}
+				else {
+					return _source.value()->length();
+				}
+			}
+			const std::string& getName() const { return _name; }
+		protected:
+			std::string _name;
+			std::optional<std::string> _path;
+			std::optional<std::shared_ptr<std::string>> _source;
+		private:
+			std::shared_ptr<std::istream> _istream;
+		};
 		struct Structure;
+		static int createArchiveFromStructure(Structure& structure, const std::string& archivePath);
+	public:
+		// Struct to create packages from memory
+		struct PackageCreator {
+			friend struct Structure;
+			friend struct package;
+		public:
+			PackageCreator() = default;
+			void addFile(const std::string& path, std::shared_ptr<std::string> source);
+			void addFile(const std::string& path, const std::string& harddrivePath);
+			void addDirectory(const std::string& path);
+		protected:
+			void addFile(const std::string& path, const File& file);
+			struct Entry {
+				Entry() = default;
+				Entry(const std::string& path, const File& file)
+					: path(path), file(file)
+				{}
+				Entry(const std::string& path)
+					: path(path)
+				{}
+				std::string path;
+				std::optional<File> file;
+			};
+			std::vector<Entry> entry;
+			std::string path;
+		};
+	private:
 		template<std::uint8_t size>
 		struct bytes {
 			bytes() = default;
@@ -93,6 +167,7 @@ namespace rvn {
 			static std::uint64_t convertCharsToUint64(bytes<8> bytes);
 			static std::vector<std::string> split(const std::string& str, const std::string& delim);
 			static std::string formatBytes(std::uint64_t bytes);
+			static std::vector<std::string> convertPath(const std::string& path);
 		};
 	};
 }
