@@ -277,6 +277,115 @@ namespace rvn {
 	{
 		return extractFile(archPath, filePath, std::filesystem::path(filePath).filename().string());
 	}
+	std::pair<int, std::shared_ptr<std::string>> package::extractToString(const std::string& archPath, const std::string& filePath)
+	{
+		std::pair<int, std::shared_ptr<std::string>> ret;
+		if (!std::filesystem::exists(archPath)) {
+			RPK_ERROR("Input doesnt exist");
+			ret.first = RPK_ARCHIVE_DOESNT_EXIST;
+			return ret;
+		}
+		else if (std::filesystem::is_directory(archPath)) {
+			RPK_ERROR("Input cant be a directory");
+			ret.first = RPK_INPUT_IS_DIRECTORY;
+			return ret;
+		}
+		else {
+			std::ifstream in(archPath, std::ios::binary);
+			if (in) {
+				std::string buffer(RPK_MAGIC_NUMBER_LENGTH, 0x00);
+				in.read(&buffer[0], buffer.length());
+				char cbuffer;
+				if (buffer != RPK_MAGIC_NUMBER) {
+					RPK_ERROR("Input is no Raven Package");
+					ret.first = RPK_INPUT_ISNT_RAVEN_PACKAGE;
+					return ret;
+				}
+				in.get(cbuffer);
+				if (std::find(supportedExtractVersions.begin(), supportedExtractVersions.end(), (std::uint8_t)cbuffer)
+					== supportedExtractVersions.end()) {
+					RPK_ERROR("Unsupported file version");
+					ret.first = RPK_UNSUPPORTED_VERSION;
+					return ret;
+				}
+				switch ((std::uint8_t)cbuffer) {
+				case RPK_VERSION_1: {
+					std::string filePathCopy = filePath;
+					std::size_t position = 0;
+					while (filePathCopy.find('\\') != filePathCopy.npos) {
+						position = filePathCopy.find('\\');
+						filePathCopy = filePathCopy.replace(position, 1, "/");
+					}
+					std::vector<std::string> fileNames = util::split(filePathCopy, "/");
+					for (auto& file : fileNames) {
+						if (file.empty()) { RPK_ERROR("Invalid path"); ret.first = RPK_INVALID_PATH; return ret; }
+					}
+					std::uint64_t begin = in.tellg();
+					for (auto& file : fileNames) {
+						in.seekg(begin);
+						buffer = std::string(2, 0x00);
+						in.read(&buffer[0], buffer.length());
+						std::uint16_t fileCount = util::convertCharsToUint16(buffer.c_str());
+						for (std::uint16_t i = 0; i < fileCount; i++) {
+							in.get(cbuffer);
+							bool isFile = cbuffer & RPK_TRAIT_IS_FILE;
+							in.get(cbuffer);
+							buffer = std::string((std::uint8_t)cbuffer, 0x00);
+							in.read(&buffer[0], buffer.length());
+							if (file != buffer) {
+								if (isFile) {
+									in.seekg(in.tellg() + std::streamoff(16));
+								}
+								else {
+									in.seekg(in.tellg() + std::streamoff(8));
+								}
+							}
+							if ((file == buffer) && isFile) {
+								buffer = std::string(8, 0x00);
+								in.read(&buffer[0], buffer.length());
+								std::uint64_t beg = util::convertCharsToUint64(buffer.c_str());
+								in.read(&buffer[0], buffer.length());
+								std::uint64_t end = util::convertCharsToUint64(buffer.c_str());
+								std::ostringstream out;
+								std::uint64_t length = (end - beg);
+								std::uint64_t counter = 0;
+								in.seekg(beg);
+								if (out) {
+									std::string buf(BUF_SIZE, 0x00);
+									for (int i = 0; i < (length / BUF_SIZE) + 1; i++) {
+										buf = std::string(length - counter > BUF_SIZE ? BUF_SIZE : length - counter, 0x00);
+										in.read(&buf[0], buf.length());
+										out << buf;
+										counter += buf.length();
+									}
+									ret.second = std::make_shared<std::string>(out.str());
+								}
+								else {
+									RPK_ERROR("Couldn't open output file");
+									ret.first = RPK_COULDNT_OPEN_FILE;
+									return ret;
+								}
+							}
+							if ((file == buffer) && !isFile) {
+								buffer = std::string(8, 0x00);
+								in.read(&buffer[0], buffer.length());
+								begin = util::convertCharsToUint64(buffer.c_str());
+							}
+						}
+					}
+					break;
+				}
+				}
+			}
+			else {
+				RPK_ERROR("Couln't open input");
+				ret.first = RPK_COULDNT_OPEN_FILE;
+				return ret;
+			}
+		}
+		ret.first = RPK_OK;
+		return ret;
+	}
 	Entries package::getEntriesAt(const std::string& archPath, const std::string& filePath)
 	{
 		Entries ret;

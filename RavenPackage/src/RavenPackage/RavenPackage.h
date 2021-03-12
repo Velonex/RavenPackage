@@ -88,6 +88,8 @@ namespace rvn {
 		static int extractFile(const std::string& archPath, const std::string& filePath, const std::string& targetPath);
 		// Extract a file from an archive and gives the file the name it had in the archive
 		static int extractFile(const std::string& archPath, const std::string& filePath);
+		// Extract file to string
+		static std::pair<int, std::shared_ptr<std::string>> extractToString(const std::string & archPath, const std::string& filePath);
 		// Extracts all directories and files in an directory in an archive (whether a directory has sub files doesn't work yet)
 		static Entries getEntriesAt(const std::string& archPath, const std::string& filePath);
 	private:
